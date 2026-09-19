@@ -3,6 +3,7 @@ import logging
 import os
 import json
 import time
+import platform
 import subprocess
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
@@ -56,7 +57,11 @@ class BroadcastState(StatesGroup):
 def get_watermark_filter(no_watermark):
     if no_watermark:
         return ""
-    return r",drawtext=fontfile='C\:/Windows/Fonts/arial.ttf':text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
+    if platform.system() == "Windows":
+        font = r"C\:/Windows/Fonts/arial.ttf"
+    else:
+        font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    return f",drawtext=fontfile='{font}':text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
 
 def process_video_pause(user_video_path, output_path, speed, user_id, no_watermark):
     res_d = subprocess.run([
@@ -532,7 +537,6 @@ async def web_server(request):
     return web.Response(text="Bot is running 24/7!")
 
 async def main():
-    # Setup web app for keep-alive ping on Render/Koyeb if PORT is set
     app = web.Application()
     app.router.add_get("/", web_server)
     runner = web.AppRunner(app)
