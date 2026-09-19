@@ -85,37 +85,30 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
     frozen_ad_clip = os.path.abspath(f"downloads/frozen_ad_{user_id}.mp4")
 
     try:
-        # Part 1 video filter
-        if no_watermark or not os.path.exists(PHOTO_PATH):
-            p1_filter = "setsar=1"
-        else:
-            p1_filter = "[0:v][1:v]scale=120:-1,setsar=1[wm];[0:v][wm]overlay=x=(W-w)/2:y=H-h-15[outv]"
-
-        # For part 1 and part 2 processing with/without watermark image
+        # Part 1 and Part 2 with/without watermark image
         if no_watermark or not os.path.exists(PHOTO_PATH):
             subprocess.run([
                 "ffmpeg", "-i", user_video_path, "-t", str(half),
                 "-filter:v", "setsar=1",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "libvo_aacenc", "-y", part1_path
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
             ], check=True, timeout=60)
             subprocess.run([
                 "ffmpeg", "-i", user_video_path, "-ss", str(half),
                 "-filter:v", "setsar=1",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "libvo_aacenc", "-y", part2_path
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
             ], check=True, timeout=60)
         else:
-            # With photo watermark overlay
             subprocess.run([
                 "ffmpeg", "-i", user_video_path, "-i", PHOTO_PATH, "-t", str(half),
                 "-filter_complex", "[1:v]scale=120:-1,setsar=1[wm];[0:v][wm]overlay=x=(W-w)/2:y=H-h-15[outv]",
                 "-map", "[outv]", "-map", "0:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "libvo_aacenc", "-y", part1_path
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
             ], check=True, timeout=60)
             subprocess.run([
                 "ffmpeg", "-i", user_video_path, "-i", PHOTO_PATH, "-ss", str(half),
                 "-filter_complex", "[1:v]scale=120:-1,setsar=1[wm];[0:v][wm]overlay=x=(W-w)/2:y=H-h-15[outv]",
                 "-map", "[outv]", "-map", "0:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "libvo_aacenc", "-y", part2_path
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
             ], check=True, timeout=60)
 
         subprocess.run([
@@ -130,7 +123,6 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
             "-y", temp_frozen
         ], check=True, timeout=60)
 
-        # Frozen ad clip with ad video + optional watermark image
         if no_watermark or not os.path.exists(PHOTO_PATH):
             if speed == 1.0:
                 frozen_filter = (
@@ -142,7 +134,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                     "-filter_complex", frozen_filter,
                     "-map", "[outv]", "-map", "1:a",
                     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "libvo_aacenc", "-b:a", "128k",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-y", frozen_ad_clip
                 ]
             else:
@@ -156,7 +148,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                     "-filter_complex", frozen_filter,
                     "-map", "[outv]", "-map", "[outa]",
                     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "libvo_aacenc", "-b:a", "128k",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-y", frozen_ad_clip
                 ]
         else:
@@ -172,7 +164,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                     "-filter_complex", frozen_filter,
                     "-map", "[outv]", "-map", "1:a",
                     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "libvo_aacenc", "-b:a", "128k",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-y", frozen_ad_clip
                 ]
             else:
@@ -188,7 +180,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                     "-filter_complex", frozen_filter,
                     "-map", "[outv]", "-map", "[outa]",
                     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "libvo_aacenc", "-b:a", "128k",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-y", frozen_ad_clip
                 ]
 
@@ -203,7 +195,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
         subprocess.run([
             "ffmpeg", "-f", "concat", "-safe", "0", "-i", concat_file,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-            "-c:a", "libvo_aacenc", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "128k",
             "-y", output_path
         ], check=True, timeout=90)
 
@@ -273,7 +265,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
                 "-filter_complex", filter_complex,
                 "-map", "[outv]", "-map", "[outa]",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-c:a", "libvo_aacenc", "-b:a", "128k",
+                "-c:a", "aac", "-b:a", "128k",
                 "-y", output_path
             ]
         else:
@@ -303,7 +295,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
                 "-filter_complex", filter_complex,
                 "-map", "[outv]", "-map", "[outa]",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-c:a", "libvo_aacenc", "-b:a", "128k",
+                "-c:a", "aac", "-b:a", "128k",
                 "-y", output_path
             ]
 
