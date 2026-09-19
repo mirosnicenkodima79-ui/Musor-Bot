@@ -53,15 +53,6 @@ known_users = load_users()
 class BroadcastState(StatesGroup):
     waiting_for_message = State()
 
-def get_watermark_filter(no_watermark):
-    if no_watermark:
-        return ""
-    if os.name == "nt":
-        font = r"C\:/Windows/Fonts/arial.ttf"
-    else:
-        font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    return f",drawtext=fontfile='{font}':text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
-
 def process_video_pause(user_video_path, output_path, speed, user_id, no_watermark):
     res_d = subprocess.run([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -94,17 +85,19 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
     frozen_ad_clip = os.path.abspath(f"downloads/frozen_ad_{user_id}.mp4")
 
     try:
-        wm = get_watermark_filter(no_watermark)
+        wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
+        
+        # Part 1 and Part 2 (optimized with ultrafast + zerolatency)
         subprocess.run([
             "ffmpeg", "-i", user_video_path, "-t", str(half),
             "-filter:v", f"setsar=1{wm}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-c:a", "aac", "-y", part1_path
         ], check=True, timeout=60)
 
         subprocess.run([
             "ffmpeg", "-i", user_video_path, "-ss", str(half),
             "-filter:v", f"setsar=1{wm}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-c:a", "aac", "-y", part2_path
         ], check=True, timeout=60)
 
         subprocess.run([
@@ -115,7 +108,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
         subprocess.run([
             "ffmpeg", "-loop", "1", "-i", frame_path,
             "-t", str(ad_duration),
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
             "-y", temp_frozen
         ], check=True, timeout=60)
 
@@ -128,7 +121,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                 "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
                 "-filter_complex", frozen_filter,
                 "-map", "[outv]", "-map", "1:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k",
                 "-y", frozen_ad_clip
             ]
@@ -142,7 +135,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                 "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
                 "-filter_complex", frozen_filter,
                 "-map", "[outv]", "-map", "[outa]",
-                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k",
                 "-y", frozen_ad_clip
             ]
@@ -157,7 +150,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
 
         subprocess.run([
             "ffmpeg", "-f", "concat", "-safe", "0", "-i", concat_file,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             "-y", output_path
         ], check=True, timeout=90)
@@ -172,6 +165,7 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
                 except: pass
 
 def process_video_overlay(user_video_path, output_path, speed, user_id, no_watermark):
+    # Mode 2 is a single fast pass (~2-3 seconds!)
     res_d = subprocess.run([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", user_video_path
@@ -205,7 +199,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "-t", str(start_time), "-y", silence_path
         ], check=True, timeout=30)
 
-        wm = get_watermark_filter(no_watermark)
+        wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
         if speed == 1.0:
             filter_complex = (
                 f"[2:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
@@ -228,7 +222,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "ffmpeg", "-i", user_video_path, "-i", silence_path, "-i", MUSOR_PATH,
             "-filter_complex", filter_complex,
             "-map", "[outv]", "-map", "[outa]",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             "-y", output_path
         ], check=True, timeout=90)
@@ -517,7 +511,7 @@ async def process_mode_callback(callback: CallbackQuery):
             if str(ve) == "TOO_LONG":
                 await callback.message.answer("<i>⚠️ Видео слишком длинное. Максимальная длительность — 1 минута!</i>", parse_mode="HTML")
             else:
-                await callback.message.answer(f"<i>❌ Ошибка: {ve}</i>", parse_mode="HTML")
+                await callback.message.answer(f"<i>❌ Ошибка: {ve}</i>", parse_make=False, parse_mode="HTML") # type: ignore
         except Exception as e:
             logging.error(f"Error: {e}")
             await callback.message.answer(f"<i>❌ Произошла ошибка при обработке: {e}</i>", parse_mode="HTML")
