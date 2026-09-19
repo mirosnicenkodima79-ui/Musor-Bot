@@ -16,8 +16,8 @@ from aiohttp import web
 
 TOKEN = "8932719806:AAFXhInm6CH7b7RtrvGh8bzelU2XwGvrL7M"
 ADMIN_ID = 8388465814
-MUSOR_PATH = r"MUSOR.MOV" if os.path.exists("MUSOR.MOV") else r"C:\Users\miros\Downloads\Screenshots\MUSOR.MOV"
-PHOTO_PATH = r"MUSOR DRIO.jpg" if os.path.exists("MUSOR DRIO.jpg") else r"C:\Users\miros\Downloads\Screenshots\MUSOR DRIO.jpg"
+MUSOR_PATH = "MUSOR.MOV"
+PHOTO_PATH = "MUSOR DRIO.jpg"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
