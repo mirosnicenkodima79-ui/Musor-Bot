@@ -76,93 +76,55 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
         orig_ad_duration = 5.9
 
     ad_duration = orig_ad_duration / speed
-    half = duration / 2
+    half = duration / 2.0
 
-    part1_path = os.path.abspath(f"downloads/part1_{user_id}.mp4")
-    part2_path = os.path.abspath(f"downloads/part2_{user_id}.mp4")
-    frame_path = os.path.abspath(f"downloads/frame_{user_id}.png")
-    temp_frozen = os.path.abspath(f"downloads/temp_frozen_{user_id}.mp4")
-    frozen_ad_clip = os.path.abspath(f"downloads/frozen_ad_{user_id}.mp4")
+    audio_probe = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index", "-of", "csv=p=0", user_video_path
+    ], stdout=subprocess.PIPE, text=True, timeout=30)
+    has_audio = bool(audio_probe.stdout.strip())
 
-    try:
-        wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
-        
-        # Part 1 and Part 2 (optimized with ultrafast + zerolatency)
-        subprocess.run([
-            "ffmpeg", "-i", user_video_path, "-t", str(half),
-            "-filter:v", f"setsar=1{wm}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-c:a", "aac", "-y", part1_path
-        ], check=True, timeout=60)
+    wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
 
-        subprocess.run([
-            "ffmpeg", "-i", user_video_path, "-ss", str(half),
-            "-filter:v", f"setsar=1{wm}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-c:a", "aac", "-y", part2_path
-        ], check=True, timeout=60)
+    h = f"{half:.3f}"
+    dur = f"{duration:.3f}"
+    ad = f"{ad_duration:.3f}"
+    sp = f"{speed:.2f}".rstrip("0").rstrip(".")
 
-        subprocess.run([
-            "ffmpeg", "-ss", str(half), "-i", user_video_path,
-            "-vframes", "1", "-y", frame_path
-        ], check=True, timeout=30)
+    fc = (
+        f"[0:v]split=3[vs1][vs2][vs3];"
+        f"[vs1]trim=0:{h},setpts=PTS-STARTPTS{wm}[v1];"
+        f"[vs2]trim={h}:{dur},setpts=PTS-STARTPTS{wm}[v2];"
+        f"[vs3]trim=start={h},setpts=PTS-STARTPTS,select='eq(n,0)',loop=loop=-1:size=1,trim=duration={ad},setpts=PTS-STARTPTS,setsar=1[frz];"
+        f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[adw];"
+        f"[frz][adw]overlay=x=(W-w)/2:y=(H-h)/2{wm}[v3];"
+    )
+    if has_audio:
+        fc += (
+            f"[0:a]asplit=2[as1][as2];"
+            f"[as1]atrim=0:{h},asetpts=PTS-STARTPTS[a1];"
+            f"[as2]atrim={h}:{dur},asetpts=PTS-STARTPTS[a2];"
+            f"[1:a]atempo={sp}[ada];"
+            f"[a1][ada][a2]concat=n=3:v=0:a=1[aout];"
+        )
+    fc += f"[v1][v3][v2]concat=n=3:v=1:a=0[vout]"
 
-        subprocess.run([
-            "ffmpeg", "-loop", "1", "-i", frame_path,
-            "-t", str(ad_duration),
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
-            "-y", temp_frozen
-        ], check=True, timeout=60)
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", user_video_path, "-i", MUSOR_PATH,
+        "-filter_complex", fc,
+        "-map", "[vout]"
+    ]
+    if has_audio:
+        cmd += ["-map", "[aout]"]
+    cmd += [
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-y", output_path
+    ]
 
-        if speed == 1.0:
-            frozen_filter = (
-                f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2{wm}[outv]"
-            )
-            cmd_args = [
-                "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
-                "-filter_complex", frozen_filter,
-                "-map", "[outv]", "-map", "1:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "128k",
-                "-y", frozen_ad_clip
-            ]
-        else:
-            frozen_filter = (
-                f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2{wm}[outv];"
-                f"[1:a]atempo={speed}[outa]"
-            )
-            cmd_args = [
-                "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
-                "-filter_complex", frozen_filter,
-                "-map", "[outv]", "-map", "[outa]",
-                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "128k",
-                "-y", frozen_ad_clip
-            ]
-
-        subprocess.run(cmd_args, check=True, timeout=60)
-
-        concat_file = os.path.abspath(f"downloads/concat_{user_id}.txt")
-        with open(concat_file, "w", encoding="utf-8") as f:
-            f.write(f"file '{part1_path.replace(os.sep, '/')}'\n")
-            f.write(f"file '{frozen_ad_clip.replace(os.sep, '/')}'\n")
-            f.write(f"file '{part2_path.replace(os.sep, '/')}'\n")
-
-        subprocess.run([
-            "ffmpeg", "-f", "concat", "-safe", "0", "-i", concat_file,
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
-            "-y", output_path
-        ], check=True, timeout=90)
-
-        if os.path.exists(concat_file):
-            os.remove(concat_file)
-
-    finally:
-        for p in [part1_path, part2_path, frame_path, temp_frozen, frozen_ad_clip]:
-            if os.path.exists(p):
-                try: os.remove(p)
-                except: pass
+    subprocess.run(cmd, check=True, timeout=120)
 
 def process_video_overlay(user_video_path, output_path, speed, user_id, no_watermark):
     # Mode 2 is a single fast pass (~2-3 seconds!)
@@ -191,6 +153,34 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
     start_time = max(0.0, (duration - ad_duration) / 2)
     end_time = start_time + ad_duration
 
+    audio_probe = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index", "-of", "csv=p=0", user_video_path
+    ], stdout=subprocess.PIPE, text=True, timeout=30)
+    has_audio = bool(audio_probe.stdout.strip())
+
+    wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
+    if not has_audio:
+        if speed == 1.0:
+            filter_complex = (
+                f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
+                f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'{wm}[outv]"
+            )
+        else:
+            filter_complex = (
+                f"[1:v]setpts=PTS/{speed},scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
+                f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'{wm}[outv]"
+            )
+        subprocess.run([
+            "ffmpeg", "-i", user_video_path, "-i", MUSOR_PATH,
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
+            "-movflags", "+faststart",
+            "-y", output_path
+        ], check=True, timeout=120)
+        return
+
     silence_path = os.path.abspath(f"downloads/silence_{user_id}.wav")
 
     try:
@@ -199,7 +189,6 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "-t", str(start_time), "-y", silence_path
         ], check=True, timeout=30)
 
-        wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
         if speed == 1.0:
             filter_complex = (
                 f"[2:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
@@ -224,8 +213,9 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "-map", "[outv]", "-map", "[outa]",
             "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "0", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
             "-y", output_path
-        ], check=True, timeout=90)
+        ], check=True, timeout=120)
     finally:
         if os.path.exists(silence_path):
             try: os.remove(silence_path)
