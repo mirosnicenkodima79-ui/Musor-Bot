@@ -53,6 +53,20 @@ known_users = load_users()
 class BroadcastState(StatesGroup):
     waiting_for_message = State()
 
+def probe_fps(video_path):
+    res = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", video_path
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    try:
+        num, den = res.stdout.strip().split("/")
+        fps = float(num) / float(den) if float(den) else 30.0
+    except Exception:
+        fps = 30.0
+    if fps < 1 or fps > 120:
+        fps = 30.0
+    return fps
+
 def process_video_pause(user_video_path, output_path, speed, user_id, no_watermark):
     res_d = subprocess.run([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -84,51 +98,67 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
     ], stdout=subprocess.PIPE, text=True, timeout=30)
     has_audio = bool(audio_probe.stdout.strip())
 
+    fps = probe_fps(user_video_path)
+
     wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
 
     h = f"{half:.3f}"
     dur = f"{duration:.3f}"
     ad = f"{ad_duration:.3f}"
     sp = f"{speed:.2f}".rstrip("0").rstrip(".")
+    fpsf = f"{fps:.2f}".rstrip("0").rstrip(".")
 
-    # Fast pipeline: downscale to max 1280px (720p-class) + cap fps to 30 -> ~4-8x faster encode
-    R = "scale='if(gt(iw,ih),1280,-2)':'if(gt(iw,ih),-2,1280)',fps=30,setsar=1"
+    frame_path = os.path.abspath(f"downloads/frame_{user_id}.png")
 
-    fc = (
-        f"[0:v]{R},split=3[vs1][vs2][vs3];"
-        f"[vs1]trim=0:{h},setpts=PTS-STARTPTS{wm}[v1];"
-        f"[vs2]trim={h}:{dur},setpts=PTS-STARTPTS{wm}[v2];"
-        f"[vs3]trim=start={h},setpts=PTS-STARTPTS,select='eq(n,0)',loop=loop=-1:size=1,trim=duration={ad},setpts=PTS-STARTPTS[frz];"
-        f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[adw];"
-        f"[frz][adw]overlay=x=(W-w)/2:y=(H-h)/2{wm}[v3];"
-    )
-    if has_audio:
-        fc += (
-            f"[0:a]asplit=2[as1][as2];"
-            f"[as1]atrim=0:{h},asetpts=PTS-STARTPTS[a1];"
-            f"[as2]atrim={h}:{dur},asetpts=PTS-STARTPTS[a2];"
-            f"[1:a]atempo={sp}[ada];"
-            f"[a1][ada][a2]concat=n=3:v=0:a=1[aout];"
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(half), "-i", user_video_path, "-vframes", "1", frame_path
+        ], check=True, timeout=30)
+
+        # Downscale to max 1280px (720p-class); fps follows the source (no artificial cap)
+        R = f"scale='if(gt(iw,ih),1280,-2)':'if(gt(iw,ih),-2,1280)',fps={fpsf},setsar=1"
+
+        fc = (
+            f"[0:v]{R},split=2[vs1][vs2];"
+            f"[vs1]trim=0:{h},setpts=PTS-STARTPTS{wm}[v1];"
+            f"[vs2]trim={h}:{dur},setpts=PTS-STARTPTS{wm}[v2];"
+            f"[2:v]{R}[frz];"
+            f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[adw];"
+            f"[frz][adw]overlay=x=(W-w)/2:y=(H-h)/2{wm}[v3];"
         )
-    fc += f"[v1][v3][v2]concat=n=3:v=1:a=0[vout]"
+        if has_audio:
+            fc += (
+                f"[0:a]asplit=2[as1][as2];"
+                f"[as1]atrim=0:{h},asetpts=PTS-STARTPTS[a1];"
+                f"[as2]atrim={h}:{dur},asetpts=PTS-STARTPTS[a2];"
+                f"[1:a]atempo={sp}[ada];"
+                f"[a1][ada][a2]concat=n=3:v=0:a=1[aout];"
+            )
+        fc += f"[v1][v3][v2]concat=n=3:v=1:a=0[vout]"
 
-    cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", user_video_path, "-i", MUSOR_PATH,
-        "-filter_complex", fc,
-        "-map", "[vout]"
-    ]
-    if has_audio:
-        cmd += ["-map", "[aout]"]
-    cmd += [
-        "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23", "-pix_fmt", "yuv420p",
-        "-x264-params", "scenecut=0",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-y", output_path
-    ]
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", user_video_path, "-i", MUSOR_PATH,
+            "-loop", "1", "-framerate", str(fps), "-t", ad, "-i", frame_path,
+            "-filter_complex", fc,
+            "-map", "[vout]"
+        ]
+        if has_audio:
+            cmd += ["-map", "[aout]"]
+        cmd += [
+            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-x264-params", "scenecut=0",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-y", output_path
+        ]
 
-    subprocess.run(cmd, check=True, timeout=120)
+        subprocess.run(cmd, check=True, timeout=120)
+    finally:
+        if os.path.exists(frame_path):
+            try: os.remove(frame_path)
+            except: pass
 
 def process_video_overlay(user_video_path, output_path, speed, user_id, no_watermark):
     # Mode 2 is a single fast pass (~2-3 seconds!)
@@ -164,8 +194,8 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
     has_audio = bool(audio_probe.stdout.strip())
 
     wm = "" if no_watermark else r",drawtext=text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
-    # Fast pipeline: downscale to max 1280px (720p-class) + cap fps to 30 -> ~4-8x faster encode
-    R = "scale='if(gt(iw,ih),1280,-2)':'if(gt(iw,ih),-2,1280)',fps=30,setsar=1"
+    # Downscale to max 1280px (720p-class) for speed; fps preserved (no cap)
+    R = "scale='if(gt(iw,ih),1280,-2)':'if(gt(iw,ih),-2,1280)',setsar=1"
     if not has_audio:
         if speed == 1.0:
             filter_complex = (
@@ -183,7 +213,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "ffmpeg", "-i", user_video_path, "-i", MUSOR_PATH,
             "-filter_complex", filter_complex,
             "-map", "[outv]",
-            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-crf", "23", "-pix_fmt", "yuv420p",
             "-x264-params", "scenecut=0",
             "-movflags", "+faststart",
             "-y", output_path
@@ -222,7 +252,7 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "ffmpeg", "-i", user_video_path, "-i", silence_path, "-i", MUSOR_PATH,
             "-filter_complex", filter_complex,
             "-map", "[outv]", "-map", "[outa]",
-            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-crf", "23", "-pix_fmt", "yuv420p",
             "-x264-params", "scenecut=0",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
