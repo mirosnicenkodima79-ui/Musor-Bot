@@ -16,8 +16,8 @@ from aiohttp import web
 
 TOKEN = "8932719806:AAFXhInm6CH7b7RtrvGh8bzelU2XwGvrL7M"
 ADMIN_ID = 8388465814
-MUSOR_PATH = "MUSOR.MOV"
-PHOTO_PATH = "MUSOR DRIO.jpg"
+MUSOR_PATH = "MUSOR.MOV" if os.path.exists("MUSOR.MOV") else r"C:\Users\miros\Downloads\Screenshots\MUSOR.MOV"
+PHOTO_PATH = "MUSOR DRIO.jpg" if os.path.exists("MUSOR DRIO.jpg") else r"C:\Users\miros\Downloads\Screenshots\MUSOR DRIO.jpg"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -53,6 +53,15 @@ known_users = load_users()
 class BroadcastState(StatesGroup):
     waiting_for_message = State()
 
+def get_watermark_filter(no_watermark):
+    if no_watermark:
+        return ""
+    if os.name == "nt":
+        font = r"C\:/Windows/Fonts/arial.ttf"
+    else:
+        font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    return f",drawtext=fontfile='{font}':text='@videomusordropbot':x=(W-tw)/2:y=H-th-25:fontsize=28:fontcolor=white@0.7:box=1:boxcolor=black@0.3"
+
 def process_video_pause(user_video_path, output_path, speed, user_id, no_watermark):
     res_d = subprocess.run([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -85,31 +94,18 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
     frozen_ad_clip = os.path.abspath(f"downloads/frozen_ad_{user_id}.mp4")
 
     try:
-        # Part 1 and Part 2 with/without watermark image
-        if no_watermark or not os.path.exists(PHOTO_PATH):
-            subprocess.run([
-                "ffmpeg", "-i", user_video_path, "-t", str(half),
-                "-filter:v", "setsar=1",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
-            ], check=True, timeout=60)
-            subprocess.run([
-                "ffmpeg", "-i", user_video_path, "-ss", str(half),
-                "-filter:v", "setsar=1",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
-            ], check=True, timeout=60)
-        else:
-            subprocess.run([
-                "ffmpeg", "-i", user_video_path, "-i", PHOTO_PATH, "-t", str(half),
-                "-filter_complex", "[1:v]scale=120:-1,setsar=1[wm];[0:v][wm]overlay=x=(W-w)/2:y=H-h-15[outv]",
-                "-map", "[outv]", "-map", "0:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
-            ], check=True, timeout=60)
-            subprocess.run([
-                "ffmpeg", "-i", user_video_path, "-i", PHOTO_PATH, "-ss", str(half),
-                "-filter_complex", "[1:v]scale=120:-1,setsar=1[wm];[0:v][wm]overlay=x=(W-w)/2:y=H-h-15[outv]",
-                "-map", "[outv]", "-map", "0:a",
-                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
-            ], check=True, timeout=60)
+        wm = get_watermark_filter(no_watermark)
+        subprocess.run([
+            "ffmpeg", "-i", user_video_path, "-t", str(half),
+            "-filter:v", f"setsar=1{wm}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part1_path
+        ], check=True, timeout=60)
+
+        subprocess.run([
+            "ffmpeg", "-i", user_video_path, "-ss", str(half),
+            "-filter:v", f"setsar=1{wm}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y", part2_path
+        ], check=True, timeout=60)
 
         subprocess.run([
             "ffmpeg", "-ss", str(half), "-i", user_video_path,
@@ -123,66 +119,33 @@ def process_video_pause(user_video_path, output_path, speed, user_id, no_waterma
             "-y", temp_frozen
         ], check=True, timeout=60)
 
-        if no_watermark or not os.path.exists(PHOTO_PATH):
-            if speed == 1.0:
-                frozen_filter = (
-                    f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                    f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2[outv]"
-                )
-                cmd_args = [
-                    "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
-                    "-filter_complex", frozen_filter,
-                    "-map", "[outv]", "-map", "1:a",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-y", frozen_ad_clip
-                ]
-            else:
-                frozen_filter = (
-                    f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                    f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2[outv];"
-                    f"[1:a]atempo={speed}[outa]"
-                )
-                cmd_args = [
-                    "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
-                    "-filter_complex", frozen_filter,
-                    "-map", "[outv]", "-map", "[outa]",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-y", frozen_ad_clip
-                ]
+        if speed == 1.0:
+            frozen_filter = (
+                f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
+                f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2{wm}[outv]"
+            )
+            cmd_args = [
+                "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
+                "-filter_complex", frozen_filter,
+                "-map", "[outv]", "-map", "1:a",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "128k",
+                "-y", frozen_ad_clip
+            ]
         else:
-            if speed == 1.0:
-                frozen_filter = (
-                    f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                    f"[2:v]scale=120:-1,setsar=1[wm];"
-                    f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2[base];"
-                    f"[base][wm]overlay=x=(W-w)/2:y=H-h-15[outv]"
-                )
-                cmd_args = [
-                    "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH, "-i", PHOTO_PATH,
-                    "-filter_complex", frozen_filter,
-                    "-map", "[outv]", "-map", "1:a",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-y", frozen_ad_clip
-                ]
-            else:
-                frozen_filter = (
-                    f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
-                    f"[2:v]scale=120:-1,setsar=1[wm];"
-                    f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2[base];"
-                    f"[base][wm]overlay=x=(W-w)/2:y=H-h-15[outv];"
-                    f"[1:a]atempo={speed}[outa]"
-                )
-                cmd_args = [
-                    "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH, "-i", PHOTO_PATH,
-                    "-filter_complex", frozen_filter,
-                    "-map", "[outv]", "-map", "[outa]",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-y", frozen_ad_clip
-                ]
+            frozen_filter = (
+                f"[1:v]scale='iw*0.55:ih*0.55',setsar=1[ad_scaled];"
+                f"[0:v][ad_scaled]overlay=x=(W-w)/2:y=(H-h)/2{wm}[outv];"
+                f"[1:a]atempo={speed}[outa]"
+            )
+            cmd_args = [
+                "ffmpeg", "-i", temp_frozen, "-i", MUSOR_PATH,
+                "-filter_complex", frozen_filter,
+                "-map", "[outv]", "-map", "[outa]",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "128k",
+                "-y", frozen_ad_clip
+            ]
 
         subprocess.run(cmd_args, check=True, timeout=60)
 
@@ -242,64 +205,33 @@ def process_video_overlay(user_video_path, output_path, speed, user_id, no_water
             "-t", str(start_time), "-y", silence_path
         ], check=True, timeout=30)
 
-        if no_watermark or not os.path.exists(PHOTO_PATH):
-            if speed == 1.0:
-                filter_complex = (
-                    f"[2:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
-                    f"[1:a][2:a]concat=n=2:v=0:a=1[timed_ad_audio];"
-                    f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
-                    f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
-                    f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'[outv]"
-                )
-            else:
-                filter_complex = (
-                    f"[2:v]setpts=PTS/{speed},scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
-                    f"[2:a]atempo={speed}[ad_a];"
-                    f"[1:a][ad_a]concat=n=2:v=0:a=1[timed_ad_audio];"
-                    f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
-                    f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
-                    f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'[outv]"
-                )
-            cmd_args = [
-                "ffmpeg", "-i", user_video_path, "-i", silence_path, "-i", MUSOR_PATH,
-                "-filter_complex", filter_complex,
-                "-map", "[outv]", "-map", "[outa]",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-y", output_path
-            ]
+        wm = get_watermark_filter(no_watermark)
+        if speed == 1.0:
+            filter_complex = (
+                f"[2:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
+                f"[1:a][2:a]concat=n=2:v=0:a=1[timed_ad_audio];"
+                f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
+                f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
+                f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'{wm}[outv]"
+            )
         else:
-            if speed == 1.0:
-                filter_complex = (
-                    f"[3:v]scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
-                    f"[1:a][3:a]concat=n=2:v=0:a=1[timed_ad_audio];"
-                    f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
-                    f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
-                    f"[2:v]scale=120:-1,setsar=1[wm];"
-                    f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'[base];"
-                    f"[base][wm]overlay=x=(W-w)/2:y=H-h-15[outv]"
-                )
-            else:
-                filter_complex = (
-                    f"[3:v]setpts=PTS/{speed},scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
-                    f"[3:a]atempo={speed}[ad_a];"
-                    f"[1:a][ad_a]concat=n=2:v=0:a=1[timed_ad_audio];"
-                    f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
-                    f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
-                    f"[2:v]scale=120:-1,setsar=1[wm];"
-                    f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'[base];"
-                    f"[base][wm]overlay=x=(W-w)/2:y=H-h-15[outv]"
-                )
-            cmd_args = [
-                "ffmpeg", "-i", user_video_path, "-i", silence_path, "-i", PHOTO_PATH, "-i", MUSOR_PATH,
-                "-filter_complex", filter_complex,
-                "-map", "[outv]", "-map", "[outa]",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-y", output_path
-            ]
+            filter_complex = (
+                f"[2:v]setpts=PTS/{speed},scale='iw*0.55:ih*0.55',setsar=1[ad_v];"
+                f"[2:a]atempo={speed}[ad_a];"
+                f"[1:a][ad_a]concat=n=2:v=0:a=1[timed_ad_audio];"
+                f"[0:a]volume=enable='between(t,{start_time},{end_time})':volume=0[base_audio];"
+                f"[base_audio][timed_ad_audio]amix=inputs=2:duration=first[outa];"
+                f"[0:v][ad_v]overlay=x=(W-w)/2:y=(H-h)/2:enable='between(t,{start_time},{end_time})'{wm}[outv]"
+            )
 
-        subprocess.run(cmd_args, check=True, timeout=90)
+        subprocess.run([
+            "ffmpeg", "-i", user_video_path, "-i", silence_path, "-i", MUSOR_PATH,
+            "-filter_complex", filter_complex,
+            "-map", "[outv]", "-map", "[outa]",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-y", output_path
+        ], check=True, timeout=90)
     finally:
         if os.path.exists(silence_path):
             try: os.remove(silence_path)
